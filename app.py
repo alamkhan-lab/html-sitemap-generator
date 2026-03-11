@@ -13,13 +13,6 @@ import re
 # --- UI CONFIG ---
 st.set_page_config(page_title="Sitemap Architect Pro", page_icon="🏗️")
 
-st.markdown("""
-    <style>
-    .stButton>button { width: 100%; border-radius: 5px; height: 3em; background-color: #007BFF; color: white; font-weight: bold; }
-    .stAlert { margin-top: 10px; }
-    </style>
-    """, unsafe_allow_html=True)
-
 # --- HYPERLINK HELPER ---
 def add_hyperlink(paragraph, text, url):
     part = paragraph.part
@@ -38,51 +31,85 @@ def add_hyperlink(paragraph, text, url):
     hyperlink.append(new_run)
     paragraph._p.append(hyperlink)
 
-def clean_label(text):
-    if not text: return ""
-    text = re.sub(r'\.html|\.php|\.aspx', '', text)
-    label = text.replace('-', ' ').replace('_', ' ').strip('/')
-    return label.title()
+# --- SMART LABEL EXTRACTION ---
+def get_meaningful_label(url):
+    """
+    Analyzes URL segments to find the most valuable anchor text.
+    Ignores IDs like '12063' and category codes like 'c'.
+    """
+    path = urlparse(url).path.strip('/')
+    if not path: return "Home"
+    
+    segments = path.split('/')
+    # List of segments to ignore (common e-comm markers)
+    ignore_list = ['c', 'p', 'v', 'cat', 'products', 'collections', 'category']
+    
+    # Iterate backwards through segments to find the first descriptive word
+    for seg in reversed(segments):
+        # 1. Skip if the segment is purely numeric (e.g., '12063')
+        if seg.isdigit():
+            continue
+        # 2. Skip if the segment is in our ignore list (e.g., 'c')
+        if seg.lower() in ignore_list:
+            continue
+        # 3. Clean and return the first valid word found
+        label = seg.replace('-', ' ').replace('_', ' ').strip()
+        return label.title()
+        
+    return "Link"
 
 def get_smart_cluster(label):
     label_up = label.upper()
-    clusters = ['LOAN', 'SUNSCREEN', 'SERUM', 'COSMETICS', 'SHAMPOO', 'SKINCARE', 'LIPSTICK', 'MAKEUP']
+    clusters = ['LOAN', 'SUNSCREEN', 'SERUM', 'COSMETICS', 'SHAMPOO', 'SKINCARE', 'LIPSTICK', 'MAKEUP', 'BAGS', 'FASHION']
     for c in clusters:
         if c in label_up: return c.title()
     words = label.split()
     return f"{words[0].title()} {words[1].title()}" if len(words) >= 2 else label.title()
 
-# --- PARSING LOGIC ---
-def extract_urls_from_raw_xml(xml_content):
-    """Extracts all <loc> tags from a string of XML content."""
+# --- AGGRESSIVE URL EXTRACTION ---
+def extract_urls_robust(xml_content):
+    """Uses both BeautifulSoup and Regex to find <loc> tags in XML."""
+    if isinstance(xml_content, bytes):
+        xml_content = xml_content.decode('utf-8', errors='ignore')
+    
+    # Method 1: BS4
     soup = BeautifulSoup(xml_content, 'xml')
-    return [loc.text.strip() for loc in soup.find_all('loc')]
+    urls = [loc.text.strip() for loc in soup.find_all('loc')]
+    
+    # Method 2: Regex fallback (if BS4 fails due to namespaces)
+    if not urls:
+        urls = re.findall(r'<loc>(.*?)</loc>', xml_content)
+    
+    return list(set(urls))
 
 def get_urls_via_request(url):
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-    }
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36'}
     try:
         response = requests.get(url, headers=headers, timeout=15)
         if response.status_code == 200:
-            return extract_urls_from_raw_xml(response.content)
+            return extract_urls_robust(response.content)
         elif response.status_code == 403:
-            st.error("🚫 Access Denied (403): This website is blocking automated requests. Please use the 'Paste Raw XML' tab below.")
-        else:
-            st.error(f"Error: Received status code {response.status_code}")
+            st.error("🚫 Nykaa/Big sites block automated tools. Please use the 'Paste Raw XML' tab.")
     except Exception as e:
-        st.error(f"Request failed: {e}")
+        st.error(f"Error: {e}")
     return []
 
+# --- ORGANIZATION ---
 def organize_urls(urls):
     tree = {}
     for url in urls:
         parsed = urlparse(url)
         path_segments = [s for s in parsed.path.split('/') if s]
-        section = clean_label(path_segments[0]) if path_segments else "Main Pages"
-        page_label = clean_label(path_segments[-1]) if path_segments else "Home"
+        
+        # High Level Folder
+        section = path_segments[0].title() if path_segments else "Main"
+        
+        # Meaningful Anchor Text
+        page_label = get_meaningful_label(url)
+        
+        # Group Subject
         group = get_smart_cluster(page_label)
+
         if section not in tree: tree[section] = {}
         if group not in tree[section]: tree[section][group] = []
         tree[section][group].append((page_label, url))
@@ -90,7 +117,7 @@ def organize_urls(urls):
 
 def create_docx(tree, domain):
     doc = Document()
-    doc.add_heading(f'Sitemap Architect Report: {domain}', 0).alignment = WD_ALIGN_PARAGRAPH.CENTER
+    doc.add_heading(f'Sitemap Report: {domain}', 0).alignment = WD_ALIGN_PARAGRAPH.CENTER
     for section in sorted(tree.keys()):
         doc.add_heading(section, level=1)
         for group, links in tree[section].items():
@@ -101,9 +128,9 @@ def create_docx(tree, domain):
     bio = io.BytesIO(); doc.save(bio); bio.seek(0)
     return bio
 
-# --- APP UI ---
+# --- UI ---
 st.title("🏗️ Sitemap Architect Pro")
-st.write("Professional categorization for all websites, including high-security e-commerce.")
+st.write("Specialized engine for e-commerce (Nykaa-style) and BFSI sitemaps.")
 
 tab1, tab2, tab3 = st.tabs(["🔗 XML URL", "📄 Paste Raw XML", "📝 Naked URLs"])
 
@@ -112,23 +139,21 @@ domain_name = "Website"
 
 with tab1:
     xml_url = st.text_input("Enter Sitemap URL")
-    st.caption("Works for most sites. If you get a 403 error, use Tab 2.")
 
 with tab2:
-    raw_xml_content = st.text_area("Paste the XML Code here", height=200, help="Visit the sitemap URL in your browser, copy everything (Ctrl+A), and paste it here.")
-    st.info("💡 Use this for Nykaa, Amazon, or sites that block automated access.")
+    raw_xml_content = st.text_area("Paste the XML Code here (Ctrl+A / Ctrl+V from browser)", height=200)
 
 with tab3:
-    naked_urls = st.text_area("Paste simple URL list (one per line)", height=200)
+    naked_urls = st.text_area("Paste Naked URL list", height=200)
 
-if st.button("Generate Professional Sitemap"):
-    if tab1 and xml_url:
+if st.button("Generate Structured Sitemap"):
+    if xml_url:
         domain_name = urlparse(xml_url).netloc
         final_urls = get_urls_via_request(xml_url)
     
     if not final_urls and raw_xml_content:
         domain_name = "Manual-Entry"
-        final_urls = extract_urls_from_raw_xml(raw_xml_content)
+        final_urls = extract_urls_robust(raw_xml_content)
         
     if not final_urls and naked_urls:
         final_urls = [l.strip() for l in naked_urls.split('\n') if l.strip()]
@@ -136,13 +161,13 @@ if st.button("Generate Professional Sitemap"):
 
     if final_urls:
         if len(final_urls) > 3000:
-            st.warning("Large sitemap detected. Processing first 3000 links.")
+            st.warning("Large sitemap. Capping at 3000 links.")
             final_urls = final_urls[:3000]
             
         tree = organize_urls(final_urls)
         docx_data = create_docx(tree, domain_name)
         
-        st.success(f"Successfully organized {len(final_urls)} links!")
-        st.download_button(label="📥 Download .docx Sitemap", data=docx_data, file_name=f"Sitemap_{domain_name}.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+        st.success(f"Successfully cleaned and organized {len(final_urls)} links!")
+        st.download_button(label="📥 Download Structured .docx", data=docx_data, file_name=f"Sitemap_{domain_name}.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
     else:
-        st.warning("No URLs found to process. Please check your input.")
+        st.warning("No URLs found. If using a large site, please use Tab 2 (Paste Raw XML).")
